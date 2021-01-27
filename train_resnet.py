@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms, datasets
 from torchvision.utils import make_grid
-# import horovod.torch as hvd
+import horovod.torch as hvd
 import time
 import pickle
 
@@ -17,12 +17,13 @@ use_gpu= torch.cuda.is_available()
 seed= 2009
 
 if use_gpu:
-    if torch.cuda.device_count() >= 1: # change to >1
+    # Initialize horovod
+    hvd.init()
+    
+    if hvd.size() > 1: 
         use_horovod= use_gpu and use_horovod
 
 if use_horovod:
-    # Initialize horovod
-    hvd.init()
     # pin GPU to local rank
     torch.cuda.set_device(hvd.local_rank())
 
@@ -93,16 +94,17 @@ def train(k, epochs):
     opt= torch.optim.Adam(model.parameters(), lr= 1e-4)
     criterion= nn.CrossEntropyLoss()
     
-    if use_horovod:
+    if use_gpu:
         model.to('cuda')
-        # broadcast parameters and optimizer state from root device to other devices
-        hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        hvd.broadcast_optimizer_state(opt, root_rank=0)
-        
-        # Wraps the opimizer for multiGPU operation
-        opt = hvd.DistributedOptimizer(opt,  
-                                      named_parameters=model.named_parameters(),
-                                      op = hvd.Adasum)
+        if use_horovod:
+            # broadcast parameters and optimizer state from root device to other devices
+            hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+            hvd.broadcast_optimizer_state(opt, root_rank=0)
+
+            # Wraps the opimizer for multiGPU operation
+            opt = hvd.DistributedOptimizer(opt,  
+                                          named_parameters=model.named_parameters(),
+                                          op = hvd.Adasum)
 
     
     loss_dict= {'epoch':[],'train':[], 'val':[]}
@@ -174,10 +176,10 @@ def plot(dd_loss_dict):
     plt.legend(fontsize=20, ncol=3) 
 
     plt.title('Generalisation Loss', pad=12) 
-
+    plt.show()
 
 def resnet18_mdl_dd():
-    width_scales= [8,16,32,64,128,256,512]
+    width_scales= [4,8,12,16,24,32,64,82]
     dd_loss_dict={}
     epochs=30
     for k in width_scales:
@@ -186,8 +188,9 @@ def resnet18_mdl_dd():
     
     return dd_loss_dict
 
-resnet18_mdl_dd()
-# dd_loss_dict={}
-# for k in [8,16,32,64,128,256]:
-#     dd_loss_dict[k]= load_obj("models/modelsdata/losses/ResNet18_Cifar10_d{}".format(k))
-# plot(dd_loss_dict)
+# dd_loss_dict=resnet18_mdl_dd()
+
+dd_loss_dict={}
+for k in [8,16,32]:
+    dd_loss_dict[k]= load_obj("models/modelsdata/losses/ResNet18_Cifar10_d{}".format(k))
+plot(dd_loss_dict)
